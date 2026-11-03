@@ -1,0 +1,885 @@
+#Packages needed
+library(scp)
+library(ggplot2)
+library("dplyr")
+library(devtools)
+library(ggrain)
+
+
+#Load sample list from scpAnnotator
+samples <- read.csv("SCP_Annotate_20260520_scEquine_list.csv")
+View(samples)
+
+#samples <- samples %>% 
+# filter(quantCols != 'Reporter.intensity.17') %>% 
+#filter(quantCols != 'Reporter.intensity.18')
+
+# Read in MQ output
+mqSCPdata <- read.delim("20260522_evidence.txt", sep="\t")
+
+View(mqSCPdata)
+
+#Assign new columns in samples - should have done first 
+samples$AgeGroup <- NA
+samples$Sex <- NA
+samples$BreedSpecific <- NA
+samples$BreedGeneral <- NA
+
+samples$AgeGroup[samples$CellType %in% c("ASC2", "ASC3", "ASC17")] <- "Young"
+samples$AgeGroup[samples$CellType %in% c("ASC8", "ASC11", "ASC10", "ASC13")] <- "Old"
+
+samples$Sex[samples$CellType %in% c("ASC2", "ASC12", "ASC11", "ASC10")] <- "Mare"
+samples$Sex[samples$CellType %in% c("ASC3", "ASC8", "ASC13", "ASC17")] <- "Gelding"
+
+samples$BreedSpecific[samples$CellType == "ASC2"] <- "Highland"
+samples$BreedSpecific[samples$CellType == "ASC3"] <- "Welsh cob"
+samples$BreedSpecific[samples$CellType == "ASC8"] <- "Arab"
+samples$BreedSpecific[samples$CellType == "ASC11"] <- "Warmblood"
+samples$BreedSpecific[samples$CellType == "ASC10"] <- "Thoroughbred"
+samples$BreedSpecific[samples$CellType == "ASC13"] <- "Warmblood"
+samples$BreedSpecific[samples$CellType == "ASC17"] <- "Welsh Cob"
+
+samples$BreedGeneral[samples$CellType %in% c("ASC2", "ASC3", "ASC17")] <- "Native"
+samples$BreedGeneral[samples$CellType %in% c("ASC8", "ASC11", "ASC10", "ASC13")] <- "Sports Horse"
+
+
+head(samples)
+View(samples)
+
+#Errored that raw file names do not match with sample runcol names 
+colnames(samples)
+head(mqSCPdata$Raw.file)
+unique(head(mqSCPdata$Raw.file))
+
+
+head(samples)
+colnames(samples)
+head(samples$Well)
+
+#Extract the well  
+samples$Well <- sub(".*W([A-Z][0-9]+)_.*", "\\1", samples$runCol)
+
+samples$runCol <- paste0(
+  "20260323_QeXHF-UM3000SC_CPR_MaLo_SA_",
+  samples$Well
+)
+
+
+samples$Raw.file <- samples$runCol
+
+scp <- scp::readSCP(
+  assayData = mqSCPdata,
+  colData = samples,
+  runCol = "Raw.file"
+)
+
+head(scp)
+View(scp)
+
+# Replace 0 with NA
+scp <- zeroIsNA(scp, i = names(scp))
+
+  
+# Compute Sample to carrier ratio
+  scp <- computeSCR(
+    scp, names(scp), 
+    colvar = "CellType", 
+    samplePattern = "ASC2|ASC3|ASC8|ASC10|ASC11|ASC13|ASC17", 
+    carrierPattern = "Carrier",
+    sampleFUN = "mean", 
+    rowDataName = "MeanSCR"
+  )
+
+#Plot Sample-to-Carrier Ratio 
+pMinProc1 <- ggplot(as.data.frame(rowData(scp[[1]]))) +
+  aes(x = MeanSCR) +
+  geom_histogram(bins = 50, alpha = 0.8, fill = "grey", color = "black") +
+  geom_vline(xintercept = c(1/200, 0.2),
+             lty = c(2, 1),
+             color = "red",
+             linewidth = 1) +
+  scale_x_log10(
+    breaks = c(10, 1, 0.1, 0.01,0.001), # Define where tick marks appear
+    #    labels = label_number()        # Use decimal notation for labels
+  ) +
+  labs(
+    x = expression(paste("Mean SCR (log"["10"], " )")), # Use expression for subscript
+    y = "Frequency") +
+  theme_classic(base_size = 16)
+
+pMinProc1
+
+colnames(rowData(scp))
+
+
+# Apply filter   
+scp <- filterFeatures(
+  scp, ~ Reverse != "+" &
+    Potential.contaminant != "+" &
+    !grepl("REV|CON", Leading.razor.protein) &
+    !is.na(PIF) & PIF > 0.6 &
+    #dart_qval < 0.01 &
+    PEP < 0.01 &
+    !is.na(MeanSCR) & MeanSCR < 0.2
+)
+
+# Count number of peptides
+scp <- countUniqueFeatures(
+  scp, i = names(scp), groupBy = "Sequence",
+  colDataName = "NumberPeptides"
+)
+
+
+# Plot No' peptides as raincloud plot and visualise cutoff
+pMinProc2 <-  colData(scp) |>
+  data.frame() |>
+  ggplot() + aes(x = CellType, 
+                 y = NumberPeptides, 
+                 fill = CellType) +
+  geom_rain() +
+  scale_fill_viridis_d() + labs(x = "Cell Type",
+     y = "Number of Peptides"
+) +
+  geom_hline(yintercept = 650, 
+             color = "red", 
+             linetype = "dashed",
+             linewidth = 1) +
+  theme_classic(base_size = 16) +
+  theme(legend.position = "none") 
+
+pMinProc2
+
+# Calc median intensity
+MedianIntensity <- lapply(experiments(scp), function(x) {
+  out <- colMedians(log(assay(x)), na.rm = TRUE)
+  names(out) <- colnames(x)
+  out
+})
+
+names(MedianIntensity) <- NULL
+MedianIntensity <- unlist(MedianIntensity)
+colData(scp)[names(MedianIntensity), "MedianIntensity"] <- MedianIntensity
+
+# Plot median intensity as boxplot and visualise min and max cutoffs
+pMinProc3 <- colData(scp) |>
+  data.frame() |>
+  ggplot() +
+  aes(x = MedianIntensity,
+      y = CellType,
+      fill = CellType) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA) +
+  geom_vline(xintercept = c(6.2, 6.9), 
+             color = "red", 
+             linetype = "dashed",
+             linewidth = 1) +
+  labs(
+    x = "Median Reporter Ion Intensity",
+    y = "Cell Type") +
+  scale_fill_viridis_d() +
+  theme_classic(base_size = 16) +
+  theme(legend.position = "none")
+
+pMinProc3
+
+
+# Calc median CV per cell
+scp <- medianCVperCell(
+  scp, i = names(scp), groupBy = "Leading.razor.protein",
+  nobs = 3, na.rm = TRUE, colDataName = "MedianCV", norm = "SCoPE2"
+)
+
+pMinProc4 <-  colData(scp) |>
+  data.frame() |>
+  ggplot() +
+  aes(x = MedianCV,
+      y = CellType,
+      fill = CellType) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA) + 
+  geom_vline(xintercept = c(0.35, 0.48), 
+             color = "red", 
+             linetype = "dashed",
+             linewidth = 1) +
+  labs(
+    x = "Median CV per Cell",
+    y = "Cell Type") +
+  theme_classic(base_size = 16) +
+  scale_fill_viridis_d() +
+  theme(legend.position = "none")
+
+pMinProc4
+
+
+# Now filter based on the above cutoffs
+passQC <- !is.na(scp$MedianCV) & scp$MedianCV > 0.35 & scp$MedianCV < 0.48 &
+  scp$MedianIntensity > 6.2 & scp$MedianIntensity < 6.9 &
+  scp$NumberPeptides > 1100 &
+  grepl("ASC2|ASC3|ASC8|ASC10|ASC11|ASC13|ASC17", scp$CellType)
+
+scp <- subsetByColData(scp, passQC)
+
+# Now some housekeeping - to clear out poor/empty assays after filtering
+# Keep assays with 4+ cells passing QC
+keepAssay <- dims(scp)[2, ] > 3
+scp <- scp[, , keepAssay]
+
+# Now keep assays with 300+ peptides passing QC
+keepAssay <- dims(scp)[1, ] > 300
+scp <- scp[, , keepAssay]
+
+
+# Aggregate PSMs to peptides
+peptideAssays <- paste0("peptides_", names(scp))
+scp <- aggregateFeatures(scp,
+                         i = names(scp),
+                         fcol = "Sequence",
+                         name = peptideAssays,
+                         fun = colMedians,
+                         na.rm = TRUE)
+
+
+
+# Now join peptide assays to a single assay
+scp <- joinAssays(scp, i = peptideAssays, 
+                  name = "peptides")
+
+# Log-transform peptide data
+scp <- logTransform(scp, i = "peptides", name = "peptides_log")
+
+# Missing value reporting section
+# Missing value reporting
+reportMissingValues(scp, "peptides", by = scp$CellType)
+
+# Calc JI
+ji <- jaccardIndex(scp, "peptides", by = scp$CellType)
+
+pRep1 <- ggplot(ji) +
+  aes(x = jaccard) +
+  geom_histogram(alpha = 0.8, fill = "grey", color = "black") +
+  facet_grid(~ by) +
+  # xlim(0, 1) + 
+  labs(x = "Jaccard Index",
+       y = "Frequency") +
+  theme_classic(base_size = 16) +
+  theme(panel.spacing.x = unit(2, "lines")) +
+  scale_x_continuous(
+    limits = c(0, 1), # Sets the axis range, replacing xlim()
+    breaks = c(0, 0.25, 0.5, 0.75, 1.0), # Specify exact tick mark locations
+    #   labels = label_number(accuracy = 0.01) # Formats labels to 2 decimal places, but is smart about trailing zeros
+  )
+
+pRep1
+
+csc <- cumulativeSensitivityCurve(scp, "peptides", by = scp$CellType,
+                                  batch = scp$runCol, niters = 10,
+                                  nsteps = 30)
+
+(plCSC <- ggplot(csc) +
+    aes(x = SampleSize, y = Sensitivity, colour = by) +
+    geom_point(size = 1) +
+    labs(
+      x = "Number of runs", 
+      y = "Sensitivity (Cumulative Peptide IDs)") +
+    theme_classic(base_size = 16) +
+    scale_colour_viridis_d()
+)
+plCSC
+
+predCSC <- predictSensitivity(csc, nSample = 1:61)
+pRep2 <- plCSC + geom_line(data = predCSC)
+
+pRep2
+
+
+library('patchwork')
+
+final_plot_reporting <- pRep1 + pRep2 +
+  plot_annotation(
+    tag_levels = 'A'
+  )
+
+final_plot_reporting
+
+ggsave(
+  filename = "SFig_Reporting.svg",
+  plot = final_plot_reporting,
+  width = 12,        # inches
+  height = 8,       # inches
+  dpi = 300          # dots per inch
+)
+
+ggsave(
+  filename = "SFig_Reporting.png",
+  plot = final_plot_reporting,
+  width = 12,        # inches
+  height = 8,       # inches
+  dpi = 300          # dots per inch
+)
+
+
+predictSensitivity(csc, nSamples = Inf)
+
+#########################################################
+# Now for some scplaining...
+sce <- getWithColData(scp, "peptides_log")
+
+# Define and perform linear modeling - based on run, reporter, median intensity, and celltype
+sce <- scpModelWorkflow(
+  sce,
+  formula = ~ 1 + ## intercept
+    ## normalization
+    MedianIntensity +
+    ## batch effects
+    quantCols + runCol + 
+    ## biological variability
+   CellType
+)
+
+
+# Define and perform linear modeling - based on run, reporter, median intensity, and age group
+sce2 <- scpModelWorkflow(
+  sce,
+  formula = ~ 1 + ## intercept
+    ## normalization
+    MedianIntensity +
+    ## batch effects
+    quantCols + runCol + 
+    ## biological variability
+    AgeGroup
+)
+
+
+# Define and perform linear modeling - based on run, reporter, median intensity, and sex
+sce3 <- scpModelWorkflow(
+  sce,
+  formula = ~ 1 + ## intercept
+    ## normalization
+    MedianIntensity +
+    ## batch effects
+    quantCols + runCol + 
+    ## biological variability
+    Sex
+)
+
+
+#################################
+#Model based on cell type (sce)
+
+# Filter based on n/p - set at >=2
+scpModelFilterThreshold(sce) <- 2#3
+pMinProc5 <- scpModelFilterPlot(sce)
+
+#pMinProc5 <- pMinProc5 +
+#  theme_classic(base_size = 16)
+pMinProc5 <- pMinProc5 +
+  theme_classic(base_size = 16) +
+  scale_fill_viridis_d() +
+  labs(
+    title = NULL,          # This removes the main title
+    x = "n/p ratio",       # This sets the new x-axis label
+    y = "Frequency"        # This sets the new y-axis label
+  )
+
+pMinProc5
+
+# Look at explained variance
+(vaRes <- scpVarianceAnalysis(sce))
+
+vaRes <- scpAnnotateResults(
+  vaRes, rowData(sce), by = "feature", by2 = "Sequence"
+)
+
+vaRes$CellType
+
+scpVariancePlot(vaRes)
+
+
+# plot variance
+pMinProc6 <- scpVariancePlot(vaRes)
+
+pMinProc6 <- pMinProc6 +
+  theme_classic(base_size = 16) +
+  scale_fill_viridis_d() +
+  theme(axis.ticks.x = element_blank())
+
+pMinProc6
+
+# Generated combined processing figure
+final_plot_minProc <- (pMinProc1 + pMinProc2) / (pMinProc3 + pMinProc4) / (pMinProc5 + pMinProc6)
+
+final_plot_minProc  <- final_plot_minProc + plot_annotation(
+  tag_levels = 'A'
+)
+
+final_plot_minProc
+
+ggsave(
+  filename = "SFig_minProc.svg",
+  plot = final_plot_minProc,
+  width = 12,        # inches
+  height = 14,       # inches
+  dpi = 300          # dots per inch
+)
+
+
+ggsave(
+  filename = "SFig_minProc.png",
+  plot = final_plot_minProc,
+  width = 12,        # inches
+  height = 14,       # inches
+  dpi = 300          # dots per inch
+)
+
+
+# Now dim red (APCA) - 10 components, may take a little while (assume ~5-10 min)
+(caRes <- scpComponentAnalysis(
+  sce, ncomp = 10, method = "APCA", effect = "CellType"
+))
+
+
+caResCells <- caRes$bySample
+sce$cell <- colnames(sce)
+caResCells <- scpAnnotateResults(caResCells, colData(sce), by = "cell")
+
+# Plot APCA
+scpComponentPlot(
+  caResCells,
+  pointParams = list(aes(colour = CellType))
+) |>
+  wrap_plots() +
+  plot_layout(guides = "collect")
+
+
+library('scales')
+library('ggrain')
+library('patchwork')
+library('scater')
+library('iSEE')
+library('viridis')
+
+# Add APCA data to the reduced dimension slots in SCE - allows prettier plotting more readily
+sce <- addReducedDims(sce, caResCells)
+reducedDims(sce)
+
+# Plot % variance explained
+variance_df <- metadata(caRes$bySample$APCA_CellType)
+View(variance_df)
+
+#proportion_variance <- metadata(caRes$bySample$APCA_AgeGroup$proportion_Variance)
+variance_df <- unlist(variance_df)
+
+
+variance_df <- data.frame(
+  Component = 1:length(variance_df),
+  Variance = as.numeric(variance_df) 
+) %>%
+  mutate(CumulativeVariance = cumsum(Variance)) # So we have it!
+
+p0 <- ggplot(variance_df, aes(x = Component, y = Variance)) +
+  geom_line(color = "skyblue", linewidth = 1) +
+  geom_point(color = "steelblue", size = 3) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_x_continuous(breaks = 1:nrow(variance_df)) +
+  labs(x = "Principal Component",
+       y = "Variance Explained"
+  ) +
+  theme_classic(base_size = 16)
+
+p0
+
+# Now get ready to plot revised version
+proportion_variance <- metadata(caRes$bySample$APCA_CellType)$proportionVariance
+
+# Create X/Y labels
+pc1_label <- sprintf("PC1 (%s)", scales::percent(proportion_variance[1], accuracy = 0.1))
+pc2_label <- sprintf("PC2 (%s)", scales::percent(proportion_variance[2], accuracy = 0.1))
+
+# Plot 1: Coloured by CellType
+p1 <- plotReducedDim(sce, "APCA_CellType", colour_by = "CellType") +
+  labs(x = pc1_label, y = pc2_label) +
+  scale_color_viridis_d() +
+  theme_classic(base_size = 16)
+
+p1
+
+# Plot 2: Coloured by MedianCV
+p2 <- plotReducedDim(sce, "APCA_CellType", colour_by = "MedianCV") +
+  labs(x = pc1_label, y = pc2_label) +
+  scale_fill_viridis_d() +
+  theme_classic(base_size = 16)
+
+p2
+
+# Plot 3: Coloured by MedianIntensity
+p3 <- plotReducedDim(sce, "APCA_CellType", colour_by = "MedianIntensity") +
+  labs(x = pc1_label, y = pc2_label) +
+  scale_fill_viridis_d() +
+  theme_classic(base_size = 16)
+
+p3
+
+# Plot 4: Coloured by NumberPeptides
+p4 <- plotReducedDim(sce, "APCA_CellType", colour_by = "NumberPeptides") +
+  labs(x = pc1_label, y = pc2_label) +
+  scale_fill_viridis_d() +
+  theme_classic(base_size = 16)
+
+p4
+
+# Plot 5: Coloured by quantCol (TMT reporter)
+p5 <- plotReducedDim(sce, "APCA_CellType", colour_by = "quantCols") +
+  labs(title = 'TMT Reporter', x = pc1_label, y = pc2_label) +
+  scale_color_viridis_d() +
+  theme_classic(base_size = 16)
+
+p5
+
+p5 <- p5 + theme(legend.position = "none")
+
+# Plot 6: Coloured by runCol (Raw.file)
+p6 <- plotReducedDim(sce, "APCA_CellType", colour_by = "runCol") +
+  labs(title = 'Raw file', x = pc1_label, y = pc2_label) +
+  scale_color_viridis_d() +
+  theme_classic(base_size = 4)
+
+p6
+
+p6 <- p6 + theme(legend.position = "none")
+
+p6
+
+final_plot_PCAQC <- (p1 | p2) / (p3 | p4) / (p5 | p6) / p0
+
+final_plot_PCAQC + plot_annotation(
+  tag_levels = 'A'
+)
+
+ggsave(
+  filename = "SFig_PCAQC.svg",
+  plot = final_plot_PCAQC,
+  width = 10,        # inches
+  height = 12,       # inches
+  dpi = 300          # dots per inch
+)
+
+ggsave(
+  filename = "SFig_PCAQC.png",
+  plot = final_plot_PCAQC,
+  width = 10,        # inches
+  height = 12,       # inches
+  dpi = 300          # dots per inch
+)
+
+#sce_age <- sce[, !is.na(colData(sce)$AgeGroup)]
+
+#plotReducedDim(sce_age, "APCA_CellType", colour_by = "AgeGroup")
+
+# Plot 7: Coloured by age
+p7 <- plotReducedDim(sce, "APCA_CellType", colour_by = "AgeGroup") +
+  labs(title = "Age Group", x = pc1_label, y = pc2_label) +
+  scale_color_viridis_d() +
+  theme_classic(base_size = 16)
+
+
+p7
+
+# Plot 8: Coloured by sex
+p8 <- plotReducedDim(sce, "APCA_CellType", colour_by = "Sex") +
+  labs(title = "Sex", x = pc1_label, y = pc2_label) +
+  scale_color_viridis_d() +
+  theme_classic(base_size = 16)
+
+p8
+
+
+# Plot 9: Coloured by breed specific
+p9 <- plotReducedDim(sce, "APCA_CellType", colour_by = "BreedSpecific") +
+  labs(title = "Breed Specific", x = pc1_label, y = pc2_label) +
+  scale_color_viridis_d() +
+  theme_classic(base_size = 16)
+
+p9
+
+
+p10 <- plotReducedDim(sce, "APCA_CellType", colour_by = "BreedGeneral") +
+  labs(title = "Breed General", x = pc1_label, y = pc2_label) +
+  scale_color_viridis_d() +
+  theme_classic(base_size = 16)
+p10
+
+
+
+p11 <- plotReducedDim(sce, "APCA_CellType", colour_by = "Diameter") +
+  labs(title = "Cell Diameter", x = pc1_label, y = pc2_label) +
+  theme_classic(base_size = 16)
+
+p11
+
+
+
+#Diffrential analysis by cell type/ donor
+
+colnames(colData(sce))
+metadata(sce)$model
+levels(factor(sce$CellType))
+
+#Compare two of the donors as a test 
+(daRes <- scpDifferentialAnalysis(
+  sce,
+  contrasts = list(c("CellType", "ASC2", "ASC3"))
+))
+
+
+#Bundle all the cell types to compare all of them 
+cts <- levels(factor(sce$CellType))
+
+contrasts <- combn(
+  cts,
+  2,
+  function(x) c("CellType", x[1], x[2]),
+  simplify = FALSE
+)
+
+length(contrasts)
+# 21
+
+(daRes <- scpDifferentialAnalysis(
+  sce,
+  contrasts = contrasts
+))
+
+
+daRes <- scpDifferentialAnalysis(
+  sce,
+  contrasts = contrasts
+)
+
+scpVolcanoPlot(daRes)
+
+
+daRes <- scpAnnotateResults(
+  daRes, rowData(sce),
+  by = "feature", by2 = "Leading.proteins"
+)
+
+np <- scpModelFilterNPRatio(sce)
+
+daRes <- scpAnnotateResults(
+  daRes, data.frame(feature = names(np), npRatio = np),
+  by = "feature"
+)
+
+scpVolcanoPlot(
+  daRes, top =30, textBy = "Proteins",
+  pointParams = list(aes(colour = npRatio), size = 1.5, shape = 3)
+)
+
+byProteinDA <- scpDifferentialAggregate(
+  daRes, fcol = "feature", method = "simes"
+)
+
+
+all(daRes[[1]]$feature %in% rownames(rowData(sce)))
+
+annot <- data.frame(
+  feature = rownames(rowData(sce)),
+  Proteins = rowData(sce)$Proteins,
+  Leading.razor.protein = rowData(sce)$Leading.razor.protein,
+  Sequence = rowData(sce)$Sequence
+)
+
+
+daRes <- scpAnnotateResults(
+  daRes,
+  annot,
+  by = "feature"
+)
+
+head(daRes[[1]][ ,
+                 c("feature","Sequence","Proteins")
+])
+
+
+byProteinDA <- scpDifferentialAggregate(
+  daRes,
+  fcol = "Proteins",
+  method = "simes"
+)
+
+
+byProteinDA <- scpDifferentialAggregate(
+  daRes,
+  fcol = "Leading.razor.protein",
+  method = "simes"
+)
+
+scpVolcanoPlot(
+  daRes, top =30, textBy = "Proteins",
+  pointParams = list(aes(colour = npRatio), size = 1.5, shape = 3)
+)
+
+
+
+
+#######################
+#Model based on age (sce2)
+
+colnames(colData(sce2))
+metadata(sce2)$model
+levels(factor(sce2$AgeGroup))
+
+#Compare two of the donors as a test 
+(daRes2 <- scpDifferentialAnalysis(
+  sce2,
+  contrasts = list(c("AgeGroup", "Old", "Young"))
+))
+
+
+
+
+scpVolcanoPlot(daRes2)
+
+
+daRes2 <- scpAnnotateResults(
+  daRes2, rowData(sce2),
+  by = "feature", by2 = "Leading.proteins"
+)
+
+np <- scpModelFilterNPRatio(sce2)
+
+daRes2 <- scpAnnotateResults(
+  daRes2, data.frame(feature = names(np), npRatio = np),
+  by = "feature"
+)
+
+scpVolcanoPlot(
+  daRes2, top =30, textBy = "Proteins",
+  pointParams = list(aes(colour = npRatio), size = 1.5, shape = 3)
+)
+
+byProteinDA <- scpDifferentialAggregate(
+  daRes2, fcol = "feature", method = "simes"
+)
+
+
+all(daRes2[[1]]$feature %in% rownames(rowData(sce2)))
+
+annot <- data.frame(
+  feature = rownames(rowData(sce2)),
+  Proteins = rowData(sce2)$Proteins,
+  Leading.razor.protein = rowData(sce2)$Leading.razor.protein,
+  Sequence = rowData(sce2)$Sequence
+)
+
+
+daRes2 <- scpAnnotateResults(
+  daRes2,
+  annot,
+  by = "feature"
+)
+
+head(daRes2[[1]][ ,
+                 c("feature","Sequence","Proteins")
+])
+
+
+byProteinDA <- scpDifferentialAggregate(
+  daRes2,
+  fcol = "Proteins",
+  method = "simes"
+)
+
+
+byProteinDA <- scpDifferentialAggregate(
+  daRes2,
+  fcol = "Leading.razor.protein",
+  method = "simes"
+)
+
+scpVolcanoPlot(
+  daRes2, top =30, textBy = "Proteins",
+  pointParams = list(aes(colour = npRatio), size = 1.5, shape = 3)
+)
+
+
+
+
+
+##########################
+#Model based on sex (sce3)
+
+colnames(colData(sce3))
+metadata(sce3)$model
+levels(factor(sce3$Sex))
+
+#Compare two of the donors as a test 
+(daRes3 <- scpDifferentialAnalysis(
+  sce3,
+  contrasts = list(c("Sex", "Gelding", "Mare"))
+))
+
+
+
+
+scpVolcanoPlot(daRes3)
+
+
+daRes3 <- scpAnnotateResults(
+  daRes3, rowData(sce3),
+  by = "feature", by2 = "Leading.proteins"
+)
+
+np <- scpModelFilterNPRatio(sce3)
+
+daRes3 <- scpAnnotateResults(
+  daRes3, data.frame(feature = names(np), npRatio = np),
+  by = "feature"
+)
+
+scpVolcanoPlot(
+  daRes3, top =30, textBy = "Proteins",
+  pointParams = list(aes(colour = npRatio), size = 1.5, shape = 3)
+)
+
+byProteinDA <- scpDifferentialAggregate(
+  daRes3, fcol = "feature", method = "simes"
+)
+
+
+all(daRes3[[1]]$feature %in% rownames(rowData(sce3)))
+
+annot <- data.frame(
+  feature = rownames(rowData(sce3)),
+  Proteins = rowData(sce3)$Proteins,
+  Leading.razor.protein = rowData(sce3)$Leading.razor.protein,
+  Sequence = rowData(sce3)$Sequence
+)
+
+
+daRes3 <- scpAnnotateResults(
+  daRes3,
+  annot,
+  by = "feature"
+)
+
+head(daRes3[[1]][ ,
+                  c("feature","Sequence","Proteins")
+])
+
+
+byProteinDA <- scpDifferentialAggregate(
+  daRes3,
+  fcol = "Proteins",
+  method = "simes"
+)
+
+
+byProteinDA <- scpDifferentialAggregate(
+  daRes3,
+  fcol = "Leading.razor.protein",
+  method = "simes"
+)
+
+scpVolcanoPlot(
+  daRes3, top =30, textBy = "Proteins",
+  pointParams = list(aes(colour = npRatio), size = 1.5, shape = 3)
+)
