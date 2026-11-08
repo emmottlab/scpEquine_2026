@@ -55,7 +55,7 @@ samples$Sex[samples$CellType %in% c("ASC3", "ASC8", "ASC13", "ASC17")] <- "Geldi
 
 
 samples$BreedSpecific[samples$CellType == "ASC2"] <- "Highland"
-samples$BreedSpecific[samples$CellType == "ASC3"] <- "Welsh cob"
+samples$BreedSpecific[samples$CellType == "ASC3"] <- "Welsh Cob"
 samples$BreedSpecific[samples$CellType == "ASC8"] <- "Arab"
 samples$BreedSpecific[samples$CellType == "ASC11"] <- "Warmblood"
 samples$BreedSpecific[samples$CellType == "ASC10"] <- "Thoroughbred"
@@ -118,7 +118,7 @@ pMinProc1 <- ggplot(as.data.frame(rowData(scp[[1]]))) +
   aes(x = MeanSCR) +
   geom_histogram(bins = 50, alpha = 0.8, fill = "grey", color = "black") +
   geom_vline(xintercept = c(1/200, 0.2),
-             lty = c(2, 1),
+             lty = c(1, 2),
              color = "red",
              linewidth = 1) +
   scale_x_log10(
@@ -168,7 +168,7 @@ pMinProc2 <-  colData(scp) |>
              linetype = "dashed",
              linewidth = 1) +
   theme_classic(base_size = 16) +
-  theme(legend.position = "none", axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+  theme(legend.position = "none", axis.text.x = element_text(size = 7))
 
 pMinProc2
 
@@ -322,7 +322,7 @@ final_plot_reporting <- pRep1 / pRep2 +
 final_plot_reporting
 
 ggsave(
-  filename = "SFig_Reporting2.svg",
+  filename = "SFig_Reporting_latest.svg",
   plot = final_plot_reporting,
   width = 18,        # inches
   height = 8,       # inches
@@ -330,7 +330,7 @@ ggsave(
 )
 
 ggsave(
-  filename = "SFig_Reporting2.png",
+  filename = "SFig_Reporting_latest.png",
   plot = final_plot_reporting,
   width = 12,        # inches
   height = 8,       # inches
@@ -354,7 +354,7 @@ sce <- scpModelWorkflow(
     ## batch effects
     quantCols + runCol + 
     ## biological variability
-    CellType
+    CellType # Note refers to the donor
 )
 
 
@@ -410,7 +410,7 @@ pMinProc5 <- scpModelFilterPlot(sce)
 #  theme_classic(base_size = 16)
 pMinProc5 <- pMinProc5 +
   theme_classic(base_size = 16) +
-  scale_fill_manual(values = mycolors) +
+  scale_colour_viridis_d() +
   labs(
     title = NULL,          # This removes the main title
     x = "n/p ratio",       # This sets the new x-axis label
@@ -438,7 +438,7 @@ pMinProc6 <- scpVariancePlot(vaRes)
 
 pMinProc6 <- pMinProc6 +
   theme_classic(base_size = 16) +
-  scale_fill_manual(values = mycolors) +
+  scale_colour_viridis_d() +
   theme(axis.ticks.x = element_blank())
 
 pMinProc6
@@ -455,16 +455,16 @@ final_plot_minProc
 ggsave(
   filename = "SFig_minProc.svg",
   plot = final_plot_minProc,
-  width = 12,        # inches
+  width = 16,        # inches
   height = 14,       # inches
   dpi = 300          # dots per inch
 )
 
 
 ggsave(
-  filename = "SFig_minProc.png",
+  filename = "SFig_minProc_latestmanuscript.png",
   plot = final_plot_minProc,
-  width = 12,        # inches
+  width = 16,        # inches
   height = 14,       # inches
   dpi = 300          # dots per inch
 )
@@ -570,7 +570,7 @@ p1_ellipse
 
 # Plot 2: Coloured by MedianCV
 p2 <- plotReducedDim(sce, "APCA_CellType", colour_by = "MedianCV") +
-  labs(x = pc1_label, y = pc2_label) +
+  labs(title = "Median CV", x = pc1_label, y = pc2_label) +
   scale_fill_viridis_d() +
   theme_classic(base_size = 16)
 
@@ -578,7 +578,7 @@ p2
 
 # Plot 3: Coloured by MedianIntensity
 p3 <- plotReducedDim(sce, "APCA_CellType", colour_by = "MedianIntensity") +
-  labs(x = pc1_label, y = pc2_label) +
+  labs(title = "Median Intensity", x = pc1_label, y = pc2_label) +
   scale_fill_viridis_d() +
   theme_classic(base_size = 16)
 
@@ -586,7 +586,7 @@ p3
 
 # Plot 4: Coloured by NumberPeptides
 p4 <- plotReducedDim(sce, "APCA_CellType", colour_by = "NumberPeptides") +
-  labs(x = pc1_label, y = pc2_label) +
+  labs(title = "Number Peptides", x = pc1_label, y = pc2_label) +
   scale_fill_viridis_d() +
   theme_classic(base_size = 16)
 
@@ -613,27 +613,6 @@ p6
 p6 <- p6 + theme(legend.position = "none", pch = 0.2)
 
 
-final_plot_PCAQC <- p2 / (p3 | p4) / (p5 | p6) / p0
-
-final_plot_PCAQC + plot_annotation(
-  tag_levels = 'A'
-)
-
-ggsave(
-  filename = "SFig_PCAQC.svg",
-  plot = final_plot_PCAQC,
-  width = 10,        # inches
-  height = 12,       # inches
-  dpi = 300          # dots per inch
-)
-
-ggsave(
-  filename = "SFig_PCAQC.png",
-  plot = final_plot_PCAQC,
-  width = 10,        # inches
-  height = 12,       # inches
-  dpi = 300          # dots per inch
-)
 
 
 
@@ -717,6 +696,33 @@ p11 <- plotReducedDim(sce, "APCA_CellType", colour_by = "Diameter") +
   theme_classic(base_size = 16)
 
 p11
+
+
+final_plot_PCAQC <- (p2 | p11)/ (p3 | p4) / (p5 | p6) / p0
+
+
+final_plot_PCAQC
+
+final_plot_PCAQC2 <- final_plot_PCAQC + plot_annotation(
+  tag_levels = 'A'
+)
+
+ggsave(
+  filename = "SFig_PCAQC.svg",
+  plot = final_plot_PCAQC,
+  width = 10,        # inches
+  height = 12,       # inches
+  dpi = 300          # dots per inch
+)
+
+ggsave(
+  filename = "SFig_PCAQC_latestmanuscript.png",
+  plot = final_plot_PCAQC2,
+  width = 10,        # inches
+  height = 12,       # inches
+  dpi = 300          # dots per inch
+)
+
 
 ###################################################
 #Differential analysis by cell type/ donor
@@ -948,7 +954,7 @@ age2
 
 ggsave(
   filename = "agespecific_plot.png",
-  plot = age_spec,
+  plot = age2,
   width = 10,        # inches
   height = 12,       # inches
   dpi = 300          # dots per inch
@@ -1130,7 +1136,7 @@ ggsave(
 
 #########################
 
-#GO analysis section
+#GO analysis section (exploratory - not in manuscript)
 
 
 Ageprot <- as.data.frame(daRes_agerange[[1]]) %>%
@@ -1170,7 +1176,7 @@ age_sig_adj <- Ageprot %>%
 
 nrow(age_sig_adj)
 head(age_sig_adj)
-#0 for age... not powerful enough
+#0 for age
 
 
 sex_sig_adj <- Sexprot %>%
@@ -1195,40 +1201,3 @@ write.table(
   row.names = FALSE,
   col.names = FALSE
 )
-
-
-#install.packages("gt")
-library(gt)
-
-
-sex_table <- sex_sig_adj %>%
-  gt() %>%
-  tab_header(
-    title = "Significant sex-associated proteins"
-  ) %>%
-  fmt_number(
-    columns = c(Estimate, pvalue, padj),
-    decimals = 3
-  )
-
-
-sex_table
-
-sex_table <- sex_sig_adj %>%
-  gt() %>%
-  tab_header(
-    title = md("**Significant Sex-Associated Proteins (FDR < 0.05)**")
-  ) %>%
-  cols_label(
-    Leading.razor.protein = "Protein ID",
-    Estimate = "Effect estimate",
-    pvalue = "P value",
-    padj = "Adjusted P value"
-  ) %>%
-  fmt_scientific(
-    columns = c(pvalue, padj),
-    decimals = 2
-  )
-
-sex_table
-
